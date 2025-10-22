@@ -67,7 +67,7 @@ jobs:
           path: |
             ${{ inputs.context }}/.gradle/caches
             ${{ inputs.context }}/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles(format('{0}/**/*.gradle*',{ inputs.context }), format('{0}/gradle-wrapper.properties',{ inputs.context })) }}
+          key: ${{ runner.os }}-gradle-${{ hashFiles(format('{0}/**/*.gradle*', inputs.context), format('{0}/gradle-wrapper.properties', inputs.context)) }}
           restore-keys: ${{ runner.os }}-gradle-
 
       - name: Build (Gradle)
@@ -80,7 +80,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.m2/repository
-          key: ${{ runner.os }}-maven-${{ hashFiles(format('{0}/**/pom.xml',{ inputs.context })) }}
+          key: ${{ runner.os }}-maven-${{ hashFiles(format('{0}/**/pom.xml', inputs.context)) }}
           restore-keys: ${{ runner.os }}-maven-
 
       - name: Build (Maven)
