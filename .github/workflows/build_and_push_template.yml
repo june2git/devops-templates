@@ -39,7 +39,7 @@ on:
 
 permissions:
   contents: read
-  id-token: write   # OIDC for AWS
+  id-token: write   # OIDC for AWS ECR
 
 jobs:
   build-and-release:
