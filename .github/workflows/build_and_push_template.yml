@@ -37,9 +37,10 @@ on:
         default: '20'
         type: string
 
-permissions:
-  contents: read
-  id-token: write   # OIDC for AWS ECR
+# permissions는 호출하는 워크플로우에서 설정
+# permissions:
+#   contents: read
+#   id-token: write   # OIDC for AWS ECR
 
 jobs:
   build-and-release:
