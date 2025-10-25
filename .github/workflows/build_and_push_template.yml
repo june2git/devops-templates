@@ -1,142 +1,193 @@
+# 워크플로우 이름 - GitHub Actions UI에서 표시되는 이름
 name: Build & Push Template
 
+# 워크플로우 실행 조건 정의
 on:
+  # workflow_call: 다른 워크플로우에서 이 워크플로우를 호출할 수 있도록 함 (재사용 가능한 템플릿)
   workflow_call:
+    # 호출할 때 전달받을 입력 매개변수들 정의
     inputs:
+      # 애플리케이션 이름 (필수)
       app_name:
         required: true
         type: string
+      # Dockerfile 경로 (필수)
       dockerfile:
         required: true
         type: string
+      # 빌드 컨텍스트 디렉토리 (필수)
       context:
         required: true
         type: string
+      # AWS ECR 저장소 이름 (필수)
       ecr_repo:
         required: true
         type: string
+      # AWS 리전 (필수)
       aws_region:
         required: true
         type: string
+      # GitOps 저장소 이름 (필수)
       gitops_repo:
         required: true
         type: string
+      # Helm values 파일 경로 (필수)
       values_file:
         required: true
         type: string
+      # 빌드 시스템 타입 (선택사항, 기본값: gradle)
       build_system:
         required: false
         default: gradle
         type: string   # gradle | maven | node
+      # JDK 버전 (선택사항, 기본값: 17)
       jdk_version:
         required: false
         default: '17'
         type: string
+      # Node.js 버전 (선택사항, 기본값: 20)
       node_version:
         required: false
         default: '20'
         type: string
 
-# permissions는 호출하는 워크플로우에서 설정
+# 권한 설정 - 호출하는 워크플로우에서 설정하므로 주석 처리
 # permissions:
-#   contents: read
-#   id-token: write   # OIDC for AWS ECR
+#   contents: read        # 저장소 코드 읽기 권한
+#   id-token: write       # OIDC 토큰 생성 권한 (AWS ECR 인증용)
 
+# 작업(jobs) 정의 - 워크플로우에서 실행할 작업들
 jobs:
+  # 작업 이름: build-and-release
   build-and-release:
+    # 실행 환경: Ubuntu 최신 버전 (GitHub에서 제공하는 가상 머신)
     runs-on: ubuntu-latest
+    # 환경 변수 설정 - 모든 스텝에서 사용 가능
     env:
-      AWS_REGION: ${{ inputs.aws_region }}
-      ECR_REPO:   ${{ inputs.ecr_repo }}
+      AWS_REGION: ${{ inputs.aws_region }}  # AWS 리전
+      ECR_REPO:   ${{ inputs.ecr_repo }}   # ECR 저장소 이름
 
+    # 작업 실행 단계들 정의
     steps:
+      # 1단계: 저장소 코드 체크아웃
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4  # GitHub Actions 공식 액션으로 코드 다운로드
 
-      # ---------- Build env (Gradle/Maven/Node) ----------
+      # ========== 빌드 환경 설정 (Gradle/Maven/Node) ==========
+      # 2단계: JDK 설정 (Java 프로젝트인 경우에만 실행)
       - name: Set up JDK
+        # 조건부 실행: build_system이 gradle 또는 maven일 때만
         if: ${{ inputs.build_system == 'gradle' || inputs.build_system == 'maven' }}
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v4  # Java 환경 설정 액션
         with:
-          distribution: temurin
-          java-version: ${{ inputs.jdk_version }}
+          distribution: temurin      # Eclipse Temurin JDK 사용 (무료, 안정적)
+          java-version: ${{ inputs.jdk_version }}  # 입력받은 JDK 버전 사용
 
+      # 3단계: Gradle 캐시 설정 (Gradle 프로젝트인 경우에만)
       - name: Cache Gradle
         if: ${{ inputs.build_system == 'gradle' }}
-        uses: actions/cache@v4
+        uses: actions/cache@v4  # 캐시 액션으로 빌드 속도 향상
         with:
+          # 캐시할 경로들 (Gradle 의존성과 래퍼)
           path: |
-            ${{ inputs.context }}/.gradle/caches
-            ${{ inputs.context }}/.gradle/wrapper
+            ${{ inputs.context }}/.gradle/caches    # Gradle 의존성 캐시
+            ${{ inputs.context }}/.gradle/wrapper   # Gradle 래퍼 파일
+          # 캐시 키: OS + gradle + 파일 해시값
           key: ${{ runner.os }}-gradle-${{ hashFiles(format('{0}/**/*.gradle*', inputs.context), format('{0}/gradle-wrapper.properties', inputs.context)) }}
+          # 캐시 복원 키 (정확한 키가 없을 때 사용)
           restore-keys: ${{ runner.os }}-gradle-
 
+      # 4단계: Gradle 빌드 실행
       - name: Build (Gradle)
         if: ${{ inputs.build_system == 'gradle' }}
-        working-directory: ${{ inputs.context }}
-        run: ./gradlew clean test bootJar --no-daemon
+        working-directory: ${{ inputs.context }}  # 작업 디렉토리 설정
+        run: ./gradlew clean test bootJar --no-daemon  # Gradle 명령어 실행
+        # clean: 이전 빌드 결과 정리
+        # test: 단위 테스트 실행
+        # bootJar: 실행 가능한 JAR 파일 생성
+        # --no-daemon: Gradle 데몬 사용 안함 (CI 환경에서 안정적)
 
+      # 5단계: Maven 캐시 설정 (Maven 프로젝트인 경우에만)
       - name: Cache Maven
         if: ${{ inputs.build_system == 'maven' }}
-        uses: actions/cache@v4
+        uses: actions/cache@v4  # Maven 의존성 캐시로 빌드 속도 향상
         with:
-          path: ~/.m2/repository
+          path: ~/.m2/repository  # Maven 로컬 저장소 경로
+          # 캐시 키: OS + maven + pom.xml 파일 해시값
           key: ${{ runner.os }}-maven-${{ hashFiles(format('{0}/**/pom.xml', inputs.context)) }}
+          # 캐시 복원 키
           restore-keys: ${{ runner.os }}-maven-
 
+      # 6단계: Maven 빌드 실행
       - name: Build (Maven)
         if: ${{ inputs.build_system == 'maven' }}
-        working-directory: ${{ inputs.context }}
-        run: mvn -B -U -e -DskipTests=false clean package
+        working-directory: ${{ inputs.context }}  # 작업 디렉토리 설정
+        run: mvn -B -U -e -DskipTests=false clean package  # Maven 명령어 실행
+        # -B: 배치 모드 (비대화형)
+        # -U: 의존성 강제 업데이트
+        # -e: 에러 발생 시 스택 트레이스 출력
+        # -DskipTests=false: 테스트 실행
+        # clean: 이전 빌드 결과 정리
+        # package: JAR/WAR 파일 생성
 
+      # 7단계: Node.js 환경 설정 (Node.js 프로젝트인 경우에만)
       - name: Setup Node
         if: ${{ inputs.build_system == 'node' }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v4  # Node.js 환경 설정 액션
         with:
-          node-version: ${{ inputs.node_version }}
-          cache: npm
+          node-version: ${{ inputs.node_version }}  # 입력받은 Node.js 버전 사용
+          cache: npm  # npm 캐시 자동 설정 (빌드 속도 향상)
 
+      # 8단계: Node.js 빌드 실행
       - name: Build (Node)
         if: ${{ inputs.build_system == 'node' }}
-        working-directory: ${{ inputs.context }}
+        working-directory: ${{ inputs.context }}  # 작업 디렉토리 설정
         run: |
-          npm ci
-          npm test --if-present
-          npm run build --if-present
+          npm ci                    # package-lock.json 기반으로 정확한 의존성 설치
+          npm test --if-present     # 테스트 실행 (package.json에 test 스크립트가 있는 경우)
+          npm run build --if-present # 빌드 실행 (package.json에 build 스크립트가 있는 경우)
 
-      # ---------- AWS & ECR ----------
+      # ========== AWS & ECR (Docker 이미지 빌드 및 푸시) ==========
+      # 9단계: AWS 자격 증명 설정 (OIDC 방식)
       - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v4  # AWS 자격 증명 설정 액션
         with:
+          # OIDC를 통해 AWS IAM 역할을 가정 (보안상 더 안전한 방식)
           role-to-assume: arn:aws:iam::703671922786:role/myeks-github-actions-ecr-role
-          aws-region: ${{ env.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }}  # AWS 리전 설정
 
+      # 10단계: ECR 로그인
       - name: Login to ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+        id: login-ecr  # 스텝 ID 설정 (다른 스텝에서 참조 가능)
+        uses: aws-actions/amazon-ecr-login@v2  # ECR 로그인 액션
 
+      # 11단계: Docker 이미지 빌드 및 ECR에 푸시
       - name: Build & Push Docker
         env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}  # ECR 레지스트리 URL
+          IMAGE_TAG: ${{ inputs.app_name }}-${{ github.ref_name }}-${{ github.run_number }}  # 이미지 태그 생성
         run: |
+          # Docker 이미지 빌드
           docker build -t $ECR_REGISTRY/${ECR_REPO}:$IMAGE_TAG -f "${{ inputs.dockerfile }}" "${{ inputs.context }}"
+          # ECR에 이미지 푸시
           docker push $ECR_REGISTRY/${ECR_REPO}:$IMAGE_TAG
+          # 환경 변수로 이미지 정보 저장 (다음 스텝에서 사용)
           echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
           echo "IMAGE_REPO=$ECR_REGISTRY/${ECR_REPO}" >> $GITHUB_ENV
 
-      # ---------- Notify GitOps ----------
+      # ========== GitOps 알림 (선택사항) ==========
+      # 12단계: GitOps 저장소에 배포 알림 (현재 주석 처리됨)
       # - name: Trigger GitOps (repository_dispatch)
-      #   uses: peter-evans/repository-dispatch@v3
+      #   uses: peter-evans/repository-dispatch@v3  # 다른 저장소에 이벤트 전송 액션
       #   with:
-      #     token: ${{ secrets.GITOPS_PAT }}
-      #     repository: ${{ inputs.gitops_repo }}
-      #     event-type: app_release
-      #     client-payload: |
+      #     token: ${{ secrets.GITOPS_PAT }}        # GitOps 저장소 접근용 Personal Access Token
+      #     repository: ${{ inputs.gitops_repo }}   # 대상 GitOps 저장소
+      #     event-type: app_release                 # 이벤트 타입
+      #     client-payload: |                       # 전송할 데이터 (JSON 형태)
       #       {
-      #         "app_name":   "${{ inputs.app_name }}",
-      #         "repository": "${{ github.repository }}",
-      #         "image_repo": "${{ env.IMAGE_REPO }}",
-      #         "image_tag":  "${{ env.IMAGE_TAG }}",
-      #         "values_file":"${{ inputs.values_file }}"
+      #         "app_name":   "${{ inputs.app_name }}",      # 애플리케이션 이름
+      #         "repository": "${{ github.repository }}",    # 현재 저장소
+      #         "image_repo": "${{ env.IMAGE_REPO }}",       # ECR 이미지 저장소
+      #         "image_tag":  "${{ env.IMAGE_TAG }}",        # 이미지 태그
+      #         "values_file":"${{ inputs.values_file }}"    # Helm values 파일
       #       }
