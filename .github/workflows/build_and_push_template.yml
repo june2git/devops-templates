@@ -153,6 +153,7 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4  # AWS 자격 증명 설정 액션
         with:
           # OIDC를 통해 AWS IAM 역할을 가정 (보안상 더 안전한 방식)
+          # 이 ARN은 basic_infra 프로젝트에서 생성된 IAM Role입니다.
           role-to-assume: arn:aws:iam::703671922786:role/myeks-github-actions-ecr-role
           aws-region: ${{ env.AWS_REGION }}  # AWS 리전 설정
 
@@ -175,19 +176,36 @@ jobs:
           echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
           echo "IMAGE_REPO=$ECR_REGISTRY/${ECR_REPO}" >> $GITHUB_ENV
 
-      # ========== GitOps 알림 (선택사항) ==========
-      # 12단계: GitOps 저장소에 배포 알림 (현재 주석 처리됨)
-      # - name: Trigger GitOps (repository_dispatch)
-      #   uses: peter-evans/repository-dispatch@v3  # 다른 저장소에 이벤트 전송 액션
-      #   with:
-      #     token: ${{ secrets.GITOPS_PAT }}        # GitOps 저장소 접근용 Personal Access Token
-      #     repository: ${{ inputs.gitops_repo }}   # 대상 GitOps 저장소
-      #     event-type: app_release                 # 이벤트 타입
-      #     client-payload: |                       # 전송할 데이터 (JSON 형태)
-      #       {
-      #         "app_name":   "${{ inputs.app_name }}",      # 애플리케이션 이름
-      #         "repository": "${{ github.repository }}",    # 현재 저장소
-      #         "image_repo": "${{ env.IMAGE_REPO }}",       # ECR 이미지 저장소
-      #         "image_tag":  "${{ env.IMAGE_TAG }}",        # 이미지 태그
-      #         "values_file":"${{ inputs.values_file }}"    # Helm values 파일
-      #       }
+      # ========== GitOps 업데이트 ==========
+      # 12단계: GitOps 저장소의 이미지 태그 업데이트
+      - name: Update GitOps Repository
+        env:
+          GITOPS_PAT: ${{ secrets.GITOPS_PAT }}
+          GITOPS_REPO: ${{ inputs.gitops_repo }}
+          VALUES_FILE: ${{ inputs.values_file }}
+        run: |
+          # GitOps 저장소 클론
+          git clone https://x-access-token:${GITOPS_PAT}@github.com/${GITOPS_REPO}.git gitops
+          cd gitops
+          
+          # yq 설치 (YAML 파일 수정 도구)
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          
+          # values 파일의 이미지 정보 업데이트
+          yq -i '.image.repository = "${{ env.IMAGE_REPO }}"' ${VALUES_FILE}
+          yq -i '.image.tag = "${{ env.IMAGE_TAG }}"' ${VALUES_FILE}
+          
+          # Git 커밋 및 푸시
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "GitHub Actions Bot"
+          git add ${VALUES_FILE}
+          
+          # 변경사항이 있을 경우에만 커밋
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: update ${{ inputs.app_name }} image to ${IMAGE_TAG}"
+            git push origin main
+            echo "✅ GitOps repository updated successfully"
+          fi
