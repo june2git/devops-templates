@@ -147,7 +147,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "chore: update ${{ inputs.app_name }} image to ${{ env.IMAGE_TAG }}"
+            git commit -m "chore: update ${{ inputs.app_name }} image to env(IMAGE_TAG)"
             git push # persist-credentials: true 옵션으로 인해 별도 설정 불필요
             echo "✅ GitOps repository updated successfully"
           fi
