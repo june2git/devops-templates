@@ -117,17 +117,25 @@ jobs:
           docker push $ECR_REGISTRY/${ECR_REPO}:$IMAGE_TAG
           echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
           echo "IMAGE_REPO=$ECR_REGISTRY/${ECR_REPO}" >> $GITHUB_ENV
+          
+      - name: Checkout GitOps Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.gitops_repo }}
+          token: ${{ secrets.GITOPS_PAT }}
+          path: gitops
+          fetch-depth: 0
 
-      - name: Update GitOps Repository
-        env:
-          GITOPS_PAT: ${{ secrets.GITOPS_PAT }}
-          GITOPS_REPO: ${{ inputs.gitops_repo }}
-          VALUES_FILE: ${{ inputs.values_file }}
+      - name: Install yq
         run: |
-          git clone https://${GITOPS_PAT}@github.com/${GITOPS_REPO}.git gitops
-          cd gitops
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
+
+      - name: Update GitOps Values
+        env:
+          VALUES_FILE: ${{ inputs.values_file }}
+        run: |
+          cd gitops
           yq -i '.image.repository = "${{ env.IMAGE_REPO }}"' ${VALUES_FILE}
           yq -i '.image.tag = "${{ env.IMAGE_TAG }}"' ${VALUES_FILE}
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -136,8 +144,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "chore: update ${{ inputs.app_name }} image to ${IMAGE_TAG}"
-            git remote set-url origin https://${GITOPS_PAT}@github.com/${GITOPS_REPO}.git
-            git push origin main
+            git commit -m "chore: update ${{ inputs.app_name }} image to ${{ env.IMAGE_TAG }}"
+            git push
             echo "✅ GitOps repository updated successfully"
           fi
