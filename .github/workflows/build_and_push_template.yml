@@ -111,9 +111,32 @@ jobs:
       - name: Build & Push Docker
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: "latest"
+          IMAGE_TAG: ${{ inputs.app_name }}-${{ github.ref_name }}-${{ github.run_number }}
         run: |
           docker build -t $ECR_REGISTRY/${ECR_REPO}:$IMAGE_TAG -f "${{ inputs.dockerfile }}" "${{ inputs.context }}"
           docker push $ECR_REGISTRY/${ECR_REPO}:$IMAGE_TAG
           echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
           echo "IMAGE_REPO=$ECR_REGISTRY/${ECR_REPO}" >> $GITHUB_ENV
+
+      - name: Update GitOps Repository
+        env:
+          GITOPS_PAT: ${{ secrets.GITOPS_PAT }}
+          GITOPS_REPO: ${{ inputs.gitops_repo }}
+          VALUES_FILE: ${{ inputs.values_file }}
+        run: |
+          git clone https://x-access-token:${GITOPS_PAT}@github.com/${GITOPS_REPO}.git gitops
+          cd gitops
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          yq -i '.image.repository = "${{ env.IMAGE_REPO }}"' ${VALUES_FILE}
+          yq -i '.image.tag = "${{ env.IMAGE_TAG }}"' ${VALUES_FILE}
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "GitHub Actions Bot"
+          git add ${VALUES_FILE}
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: update ${{ inputs.app_name }} image to ${IMAGE_TAG}"
+            git push origin main
+            echo "✅ GitOps repository updated successfully"
+          fi
