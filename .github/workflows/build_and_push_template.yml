@@ -124,7 +124,7 @@ jobs:
           GITOPS_REPO: ${{ inputs.gitops_repo }}
           VALUES_FILE: ${{ inputs.values_file }}
         run: |
-          git clone https://x-access-token:${GITOPS_PAT}@github.com/${GITOPS_REPO}.git gitops
+          git clone https://${GITOPS_PAT}@github.com/${GITOPS_REPO}.git gitops
           cd gitops
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
@@ -137,6 +137,7 @@ jobs:
             echo "No changes to commit"
           else
             git commit -m "chore: update ${{ inputs.app_name }} image to ${IMAGE_TAG}"
+            git remote set-url origin https://${GITOPS_PAT}@github.com/${GITOPS_REPO}.git
             git push origin main
             echo "✅ GitOps repository updated successfully"
           fi
