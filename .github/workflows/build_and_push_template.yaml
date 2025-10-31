@@ -35,7 +35,12 @@ on:
       values_file:
         required: true
         type: string
-      # 빌드 시스템 타입 (gradle/maven/node)
+      # GitOps values prefix (예: producer, consumer, 빈 문자열이면 루트)
+      values_prefix:
+        required: false
+        default: ''
+        type: string
+      # 빌드 시스템 타입 (gradle/maven/node/go)
       build_system:
         required: false
         default: gradle
@@ -49,6 +54,11 @@ on:
       node_version:
         required: false
         default: '20'
+        type: string
+      # Go 버전 (Go 빌드 시 사용)
+      go_version:
+        required: false
+        default: '1.22'
         type: string
     # Secrets: 호출하는 워크플로우에서 전달받는 민감한 정보
     secrets:
@@ -145,7 +155,26 @@ jobs:
           npm test --if-present     # 테스트 스크립트가 있으면 실행
           npm run build --if-present  # 빌드 스크립트가 있으면 실행
 
-      # Step 10: AWS 자격 증명 설정 (OIDC 사용)
+      # Step 10: Go 설정 (Go 프로젝트인 경우만 실행)
+      - name: Setup Go
+        if: ${{ inputs.build_system == 'go' }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ inputs.go_version }}  # Go 버전 (기본: 1.22)
+          cache: true                           # Go 모듈 캐시 활성화
+
+      # Step 11: Go 빌드 (선택사항)
+      # Go의 경우 Docker Multi-stage 빌드에서 처리하므로 생략 가능
+      # 하지만 테스트를 먼저 실행하고 싶다면 주석 해제
+      # - name: Build (Go)
+      #   if: ${{ inputs.build_system == 'go' }}
+      #   working-directory: ${{ inputs.context }}
+      #   run: |
+      #     go mod download           # 의존성 다운로드
+      #     go test ./...             # 테스트 실행
+      #     go build -v ./...         # 빌드 (Docker에서 다시 빌드됨)
+
+      # Step 12: AWS 자격 증명 설정 (OIDC 사용)
       # GitHub Actions에서 AWS IAM 역할을 assume하여 임시 자격 증명 획득
       # 장기 자격 증명(Access Key)을 저장하지 않아 보안성 향상
       - name: Configure AWS credentials (OIDC)
@@ -154,13 +183,13 @@ jobs:
           role-to-assume: arn:aws:iam::703671922786:role/myeks-github-actions-ecr-role  # IAM 역할 ARN
           aws-region: ${{ env.AWS_REGION }}  # AWS 리전
 
-      # Step 11: ECR 로그인
+      # Step 13: ECR 로그인
       # Docker가 ECR에 이미지를 푸시할 수 있도록 인증
       - name: Login to ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # Step 12: Docker 이미지 빌드 & ECR 푸시
+      # Step 14: Docker 이미지 빌드 & ECR 푸시
       # 버전 기반 태그를 생성하여 이미지를 빌드하고 ECR에 푸시
       - name: Build & Push Docker
         env:
@@ -175,21 +204,28 @@ jobs:
           echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
           echo "IMAGE_REPO=${ECR_REGISTRY}/${ECR_REPO}" >> $GITHUB_ENV
           
-      # Step 13: yq 설치
+      # Step 15: yq 설치
       # YAML 파일을 편집하기 위한 커맨드라인 도구
       - name: Install yq
         uses: frenck/action-setup-yq@v1
         
-      # Step 14: GitOps 저장소 자동 업데이트
+      # Step 16: GitOps 저장소 자동 업데이트
       # values-prod.yaml 파일의 이미지 태그를 새 버전으로 업데이트하고 커밋
       - name: Update GitOps Values
         env:
           VALUES_FILE: ${{ inputs.values_file }}  # values 파일 경로 (예: charts/values-prod.yaml)
+          VALUES_PREFIX: ${{ inputs.values_prefix }}  # values prefix (예: producer, consumer)
         run: |
           cd gitops
           # yq를 사용하여 YAML 파일 수정 (이미지 저장소와 태그 업데이트)
-          yq -i '.image.repository = env(IMAGE_REPO)' "${VALUES_FILE}"
-          yq -i '.image.tag = env(IMAGE_TAG)' "${VALUES_FILE}"
+          # prefix가 있으면 .prefix.image.repository, 없으면 .image.repository
+          if [ -z "${VALUES_PREFIX}" ]; then
+            yq -i '.image.repository = env(IMAGE_REPO)' "${VALUES_FILE}"
+            yq -i '.image.tag = env(IMAGE_TAG)' "${VALUES_FILE}"
+          else
+            yq -i ".${VALUES_PREFIX}.image.repository = env(IMAGE_REPO)" "${VALUES_FILE}"
+            yq -i ".${VALUES_PREFIX}.image.tag = env(IMAGE_TAG)" "${VALUES_FILE}"
+          fi
           # Git 설정
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config user.name "GitHub Actions Bot"
@@ -199,7 +235,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "chore: update ${{ inputs.app_name }} image to env(IMAGE_TAG)"
+            git commit -m "chore: update ${{ inputs.app_name }} image to ${IMAGE_TAG}"
             git push  # actions/checkout의 token으로 인증됨
             echo "✅ GitOps repository updated successfully"
           fi
