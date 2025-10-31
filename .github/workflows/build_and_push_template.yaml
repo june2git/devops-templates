@@ -236,6 +236,19 @@ jobs:
             echo "No changes to commit"
           else
             git commit -m "chore: update ${{ inputs.app_name }} image to ${IMAGE_TAG}"
-            git push  # actions/checkout의 token으로 인증됨
+            # Pull & rebase 후 push (동시 빌드 시 충돌 방지)
+            MAX_RETRIES=5
+            RETRY_COUNT=0
+            while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+              git pull --rebase origin main && git push && break
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+              if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                echo "⚠️  Push failed, retrying ($RETRY_COUNT/$MAX_RETRIES)..."
+                sleep $((RETRY_COUNT * 2))  # Exponential backoff
+              else
+                echo "❌ Failed to push after $MAX_RETRIES attempts"
+                exit 1
+              fi
+            done
             echo "✅ GitOps repository updated successfully"
           fi
