@@ -1,4 +1,4 @@
-# Reusable Workflow: 애플리케이션 빌드 & Docker 이미지 ECR 푸시 & GitOps 자동 업데이트
+# Reusable Workflow: 애플리케이션 빌드 & Docker 이미지 ACR 푸시 & GitOps 자동 업데이트
 # 여러 애플리케이션 저장소에서 재사용 가능한 공통 CI/CD 템플릿
 name: Build & Push Template
 
@@ -19,11 +19,11 @@ on:
       context:
         required: true
         type: string
-      # ECR 저장소 이름 (예: demo-app)
+      # ACR 이름 (예: acrjune2souldev)
       ecr_repo:
         required: true
         type: string
-      # AWS 리전 (예: ap-northeast-2)
+      # AWS 리전 (예: ap-northeast-2) - 예전 호환용
       aws_region:
         required: true
         type: string
@@ -66,28 +66,38 @@ on:
       GITOPS_PAT:
         required: true
         description: "GitHub Personal Access Token for GitOps repository access"
-   
+
+      # ⬇⬇⬇ Azure OIDC 로그인용 Service Principal 정보 추가 ⬇⬇⬇
+      AZURE_CLIENT_ID:
+        required: true
+        description: "Azure AD Application (client) ID for GitHub OIDC"
+      AZURE_TENANT_ID:
+        required: true
+        description: "Azure AD tenant ID"
+      AZURE_SUBSCRIPTION_ID:
+        required: true
+        description: "Azure subscription ID"
 
 jobs:
   build-and-release:
     runs-on: ubuntu-latest  # GitHub 호스팅 러너 (Ubuntu 최신 버전)
+
     # OIDC 토큰 발급을 위한 권한 설정
     permissions:
       contents: read
       id-token: write  # Azure OIDC 인증에 필요
+
     # 환경 변수 설정: 모든 step에서 사용 가능
     env:
-      AWS_REGION: ${{ inputs.aws_region }}  # AWS 리전 (호환성을 위해 유지)
+      AWS_REGION: ${{ inputs.aws_region }}  # 예전 AWS 호환용 (지금은 의미 거의 없음)
       ECR_REPO:   ${{ inputs.ecr_repo }}    # ACR 이름 (변수명은 호환성을 위해 유지)
 
     steps:
       # Step 1: 애플리케이션 소스 코드 체크아웃
-      # 호출한 저장소(예: eks-app)의 코드를 가져옴
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
       # Step 2: GitOps 저장소 체크아웃
-      # values-prod.yaml 파일을 업데이트하기 위해 GitOps 저장소를 가져옴
       - name: Checkout GitOps Repository
         uses: actions/checkout@v4
         with:
@@ -97,148 +107,111 @@ jobs:
           fetch-depth: 0                         # 전체 히스토리 가져오기
 
       # Step 3: JDK 설정 (Java 프로젝트인 경우만 실행)
-      # Gradle 또는 Maven 빌드 시스템을 사용하는 경우
       - name: Set up JDK
         if: ${{ inputs.build_system == 'gradle' || inputs.build_system == 'maven' }}
         uses: actions/setup-java@v4
         with:
-          distribution: temurin           # Eclipse Temurin (OpenJDK)
-          java-version: ${{ inputs.jdk_version }}  # JDK 버전 (기본: 17)
+          distribution: temurin
+          java-version: ${{ inputs.jdk_version }}
 
-      # Step 4: Gradle 캐시 설정 (빌드 속도 향상)
-      # 이전 빌드의 의존성을 재사용하여 빌드 시간 단축
+      # Step 4: Gradle 캐시
       - name: Cache Gradle
         if: ${{ inputs.build_system == 'gradle' }}
         uses: actions/cache@v4
         with:
           path: |
-            ${{ inputs.context }}/.gradle/caches      # Gradle 캐시 디렉토리
-            ${{ inputs.context }}/.gradle/wrapper     # Gradle Wrapper
+            ${{ inputs.context }}/.gradle/caches
+            ${{ inputs.context }}/.gradle/wrapper
           key: ${{ runner.os }}-gradle-${{ hashFiles(format('{0}/**/*.gradle*', inputs.context), format('{0}/gradle-wrapper.properties', inputs.context)) }}
           restore-keys: ${{ runner.os }}-gradle-
 
-      # Step 5: Gradle 빌드 (Spring Boot 애플리케이션)
-      # 테스트 실행 후 실행 가능한 JAR 파일 생성
+      # Step 5: Gradle 빌드
       - name: Build (Gradle)
         if: ${{ inputs.build_system == 'gradle' }}
         working-directory: ${{ inputs.context }}
-        run: ./gradlew clean test bootJar --no-daemon  # 테스트 실행 & JAR 생성
+        run: ./gradlew clean test bootJar --no-daemon
 
-      # Step 6: Maven 캐시 설정 (빌드 속도 향상)
-      # Maven 의존성을 재사용하여 빌드 시간 단축
+      # Step 6: Maven 캐시
       - name: Cache Maven
         if: ${{ inputs.build_system == 'maven' }}
         uses: actions/cache@v4
         with:
-          path: ~/.m2/repository              # Maven 로컬 저장소
+          path: ~/.m2/repository
           key: ${{ runner.os }}-maven-${{ hashFiles(format('{0}/**/pom.xml', inputs.context)) }}
           restore-keys: ${{ runner.os }}-maven-
 
       # Step 7: Maven 빌드
-      # 테스트 실행 후 패키징 (JAR/WAR)
       - name: Build (Maven)
         if: ${{ inputs.build_system == 'maven' }}
         working-directory: ${{ inputs.context }}
-        run: mvn -B -U -e -DskipTests=false clean package  # -B: 배치 모드, -U: 의존성 업데이트
+        run: mvn -B -U -e -DskipTests=false clean package
 
-      # Step 8: Node.js 설정 (Node.js 프로젝트인 경우만 실행)
+      # Step 8: Node.js 설정
       - name: Setup Node
         if: ${{ inputs.build_system == 'node' }}
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ inputs.node_version }}  # Node.js 버전 (기본: 20)
-          cache: npm                                # npm 캐시 활성화
+          node-version: ${{ inputs.node_version }}
+          cache: npm
 
-      # Step 9: Node.js 빌드
-      # 의존성 설치, 테스트 실행, 프로덕션 빌드
+      # Step 9: Node 빌드
       - name: Build (Node)
         if: ${{ inputs.build_system == 'node' }}
         working-directory: ${{ inputs.context }}
         run: |
-          npm ci                    # package-lock.json 기반 정확한 설치
-          npm test --if-present     # 테스트 스크립트가 있으면 실행
-          npm run build --if-present  # 빌드 스크립트가 있으면 실행
+          npm ci
+          npm test --if-present
+          npm run build --if-present
 
-      # Step 10: Go 설정 (Go 프로젝트인 경우만 실행)
+      # Step 10: Go 설정
       - name: Setup Go
         if: ${{ inputs.build_system == 'go' }}
         uses: actions/setup-go@v5
         with:
-          go-version: ${{ inputs.go_version }}  # Go 버전 (기본: 1.22)
-          cache: true                           # Go 모듈 캐시 활성화
+          go-version: ${{ inputs.go_version }}
+          cache: true
 
-      # Step 11: Go 빌드 (선택사항)
-      # Go의 경우 Docker Multi-stage 빌드에서 처리하므로 생략 가능
-      # 하지만 테스트를 먼저 실행하고 싶다면 주석 해제
-      # - name: Build (Go)
-      #   if: ${{ inputs.build_system == 'go' }}
-      #   working-directory: ${{ inputs.context }}
-      #   run: |
-      #     go mod download           # 의존성 다운로드
-      #     go test ./...             # 테스트 실행
-      #     go build -v ./...         # 빌드 (Docker에서 다시 빌드됨)
-
-      # Step 12: AWS 자격 증명 설정 (OIDC 사용)
-      # GitHub Actions에서 AWS IAM 역할을 assume하여 임시 자격 증명 획득
-      # 장기 자격 증명(Access Key)을 저장하지 않아 보안성 향상
-      #- name: Configure AWS credentials (OIDC)
-      #  uses: aws-actions/configure-aws-credentials@v4
-      #  with:
-      #    role-to-assume: arn:aws:iam::703671922786:role/myeks-github-actions-ecr-role  # IAM 역할 ARN
-      #    aws-region: ${{ env.AWS_REGION }}  # AWS 리전
-
-      # Step 13: ECR 로그인 (주석처리)
-      # Docker가 ECR에 이미지를 푸시할 수 있도록 인증
-      # - name: Login to ECR
-      #   id: login-ecr
-      #   uses: aws-actions/amazon-ecr-login@v2
-
-      # Step 13: Azure 로그인 (OIDC)
-      # GitHub Actions에서 Azure에 OIDC를 통해 인증하여 ACR에 접근할 수 있도록 설정
-      # azure/login@v2는 기본적으로 OIDC를 사용하므로 auth-type을 명시할 필요 없음
-      - name: Login to Azure
+      # -----------------------------
+      # 🔵 Azure Login (OIDC, azure/login@v2 사용)
+      # -----------------------------
+      - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          # 별도 auth-type, audience 설정 필요 없음
+          # permissions.id-token: write 덕분에 OIDC 자동 사용
 
-      # Step 14: ACR 로그인
-      # Docker가 ACR에 이미지를 푸시할 수 있도록 인증
+      # Step: ACR 로그인
       - name: Login to ACR
         run: |
           az acr login --name ${{ inputs.ecr_repo }}
 
-      # Step 15: Docker 이미지 빌드 & ACR 푸시
-      # 버전 기반 태그를 생성하여 이미지를 빌드하고 ACR에 푸시
+      # Step: Docker 이미지 빌드 & ACR 푸시
       - name: Build & Push Docker
         env:
-          ACR_REGISTRY: ${{ inputs.ecr_repo }}.azurecr.io  # ACR 레지스트리 URL
-          IMAGE_TAG: ${{ inputs.app_name }}-${{ github.ref_name }}-${{ github.run_number }}  # 버전 태그 (예: demo-main-123)
+          ACR_REGISTRY: ${{ inputs.ecr_repo }}.azurecr.io
+          IMAGE_TAG: ${{ inputs.app_name }}-${{ github.ref_name }}-${{ github.run_number }}
         run: |
-          # Docker 이미지 빌드
-          docker build --platform linux/amd64 -t ${ACR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} -f "${{ inputs.dockerfile }}" "${{ inputs.context }}"
-          # ACR에 이미지 푸시
+          docker build --platform linux/amd64 \
+            -t ${ACR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} \
+            -f "${{ inputs.dockerfile }}" "${{ inputs.context }}"
           docker push ${ACR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}
-          # 환경 변수로 저장 (다음 step에서 사용)
           echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
           echo "IMAGE_REPO=${ACR_REGISTRY}/${ECR_REPO}" >> $GITHUB_ENV
-          
-      # Step 16: yq 설치
-      # YAML 파일을 편집하기 위한 커맨드라인 도구
+
+      # Step: yq 설치
       - name: Install yq
         uses: frenck/action-setup-yq@v1
-        
-      # Step 17: GitOps 저장소 자동 업데이트
-      # values-prod.yaml 파일의 이미지 태그를 새 버전으로 업데이트하고 커밋
+
+      # Step: GitOps 저장소 자동 업데이트
       - name: Update GitOps Values
         env:
-          VALUES_FILE: ${{ inputs.values_file }}  # values 파일 경로 (예: charts/values-prod.yaml)
-          VALUES_PREFIX: ${{ inputs.values_prefix }}  # values prefix (예: producer, consumer)
+          VALUES_FILE: ${{ inputs.values_file }}
+          VALUES_PREFIX: ${{ inputs.values_prefix }}
         run: |
           cd gitops
-          # yq를 사용하여 YAML 파일 수정 (이미지 저장소와 태그 업데이트)
-          # prefix가 있으면 .prefix.image.repository, 없으면 .image.repository
           if [ -z "${VALUES_PREFIX}" ]; then
             yq -i '.image.repository = env(IMAGE_REPO)' "${VALUES_FILE}"
             yq -i '.image.tag = env(IMAGE_TAG)' "${VALUES_FILE}"
@@ -246,17 +219,17 @@ jobs:
             yq -i ".${VALUES_PREFIX}.image.repository = env(IMAGE_REPO)" "${VALUES_FILE}"
             yq -i ".${VALUES_PREFIX}.image.tag = env(IMAGE_TAG)" "${VALUES_FILE}"
           fi
-          # Git 설정
+
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config user.name "GitHub Actions Bot"
-          # 변경사항 스테이징
+
           git add "${VALUES_FILE}"
-          # 변경사항이 있는 경우에만 커밋 & 푸시
+
           if git diff --cached --quiet; then
             echo "No changes to commit"
           else
             git commit -m "chore: update ${{ inputs.app_name }} image to ${IMAGE_TAG}"
-            # Pull & rebase 후 push (동시 빌드 시 충돌 방지)
+
             MAX_RETRIES=5
             RETRY_COUNT=0
             while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
@@ -264,7 +237,7 @@ jobs:
               RETRY_COUNT=$((RETRY_COUNT + 1))
               if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
                 echo "⚠️  Push failed, retrying ($RETRY_COUNT/$MAX_RETRIES)..."
-                sleep $((RETRY_COUNT * 2))  # Exponential backoff
+                sleep $((RETRY_COUNT * 2))
               else
                 echo "❌ Failed to push after $MAX_RETRIES attempts"
                 exit 1
