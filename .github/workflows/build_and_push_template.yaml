@@ -189,14 +189,15 @@ jobs:
       #   id: login-ecr
       #   uses: aws-actions/amazon-ecr-login@v2
 
-      # Step 13: Azure 로그인
-      # GitHub Actions에서 Azure에 인증하여 ACR에 접근할 수 있도록 설정
+      # Step 13: Azure 로그인 (OIDC)
+      # GitHub Actions에서 Azure에 OIDC를 통해 인증하여 ACR에 접근할 수 있도록 설정
       - name: Login to Azure
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          auth-type: OIDC
 
       # Step 14: ACR 로그인
       # Docker가 ACR에 이미지를 푸시할 수 있도록 인증
