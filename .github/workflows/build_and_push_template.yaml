@@ -177,39 +177,54 @@ jobs:
       # Step 12: AWS 자격 증명 설정 (OIDC 사용)
       # GitHub Actions에서 AWS IAM 역할을 assume하여 임시 자격 증명 획득
       # 장기 자격 증명(Access Key)을 저장하지 않아 보안성 향상
-      - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::703671922786:role/myeks-github-actions-ecr-role  # IAM 역할 ARN
-          aws-region: ${{ env.AWS_REGION }}  # AWS 리전
+      #- name: Configure AWS credentials (OIDC)
+      #  uses: aws-actions/configure-aws-credentials@v4
+      #  with:
+      #    role-to-assume: arn:aws:iam::703671922786:role/myeks-github-actions-ecr-role  # IAM 역할 ARN
+      #    aws-region: ${{ env.AWS_REGION }}  # AWS 리전
 
-      # Step 13: ECR 로그인
+      # Step 13: ECR 로그인 (주석처리)
       # Docker가 ECR에 이미지를 푸시할 수 있도록 인증
-      - name: Login to ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+      # - name: Login to ECR
+      #   id: login-ecr
+      #   uses: aws-actions/amazon-ecr-login@v2
 
-      # Step 14: Docker 이미지 빌드 & ECR 푸시
-      # 버전 기반 태그를 생성하여 이미지를 빌드하고 ECR에 푸시
+      # Step 13: Azure 로그인
+      # GitHub Actions에서 Azure에 인증하여 ACR에 접근할 수 있도록 설정
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Step 14: ACR 로그인
+      # Docker가 ACR에 이미지를 푸시할 수 있도록 인증
+      - name: Login to ACR
+        run: |
+          az acr login --name ${{ inputs.ecr_repo }}
+
+      # Step 15: Docker 이미지 빌드 & ACR 푸시
+      # 버전 기반 태그를 생성하여 이미지를 빌드하고 ACR에 푸시
       - name: Build & Push Docker
         env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}  # ECR 레지스트리 URL
+          ACR_REGISTRY: ${{ inputs.ecr_repo }}.azurecr.io  # ACR 레지스트리 URL
           IMAGE_TAG: ${{ inputs.app_name }}-${{ github.ref_name }}-${{ github.run_number }}  # 버전 태그 (예: demo-main-123)
         run: |
           # Docker 이미지 빌드
-          docker build -t ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} -f "${{ inputs.dockerfile }}" "${{ inputs.context }}"
-          # ECR에 이미지 푸시
-          docker push ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}
+          docker build --platform linux/amd64 -t ${ACR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} -f "${{ inputs.dockerfile }}" "${{ inputs.context }}"
+          # ACR에 이미지 푸시
+          docker push ${ACR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}
           # 환경 변수로 저장 (다음 step에서 사용)
           echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
-          echo "IMAGE_REPO=${ECR_REGISTRY}/${ECR_REPO}" >> $GITHUB_ENV
+          echo "IMAGE_REPO=${ACR_REGISTRY}/${ECR_REPO}" >> $GITHUB_ENV
           
-      # Step 15: yq 설치
+      # Step 16: yq 설치
       # YAML 파일을 편집하기 위한 커맨드라인 도구
       - name: Install yq
         uses: frenck/action-setup-yq@v1
         
-      # Step 16: GitOps 저장소 자동 업데이트
+      # Step 17: GitOps 저장소 자동 업데이트
       # values-prod.yaml 파일의 이미지 태그를 새 버전으로 업데이트하고 커밋
       - name: Update GitOps Values
         env:
